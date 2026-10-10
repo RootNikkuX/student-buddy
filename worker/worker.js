@@ -65,19 +65,38 @@ async function verify(body, env) {
   if (!/^https:\/\/[^\s]{3,480}$/.test(url)) return { ok: false, error: 'bad_url' };
   const key = env.TINYFISH_API_KEY;
   if (!key) return { ok: false, error: 'no_key' };
+  const why = [];
   const goal =
     `You are on the official page for "${name}". Read the page (do not log in, do not submit any form). ` +
     `Find the CURRENT application or registration details. Return ONLY JSON like: ` +
     `{"status":"open|closed|upcoming|unknown","deadline":"YYYY-MM-DD or null","deadline_text":"deadline as written on the page or null",` +
     `"fee":"fee as written or null","eligibility":"age/year/branch rule in one short line or null","summary":"max 25 words"}. ` +
     `If something is not on the page use null. Do not guess.`;
-  const why = [];
+
+  /* Backup (free Fetch API) starts at the same time, so it is already done if the agent is slow. */
+  const backup = (async () => {
+    try {
+      const r = await fetch(FETCH_URL, {
+        method: 'POST',
+        headers: { 'X-API-Key': key, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ urls: [url], format: 'markdown' }),
+        signal: AbortSignal.timeout(25000)
+      });
+      if (!r.ok) { why.push('fetch http ' + r.status); return null; }
+      const j = await r.json();
+      const t = j.results && j.results[0] && j.results[0].text;
+      const lines = keyLines(typeof t === 'string' ? t : JSON.stringify(t || ''));
+      if (!lines.length) { why.push('fetch: page read but no date/fee lines found'); return null; }
+      return lines;
+    } catch (e) { why.push('fetch ' + (e && e.name || 'error')); return null; }
+  })();
+
   try {
     const r = await fetch(AGENT_URL, {
       method: 'POST',
       headers: { 'X-API-Key': key, 'Content-Type': 'application/json' },
       body: JSON.stringify({ url, goal }),
-      signal: AbortSignal.timeout(75000)
+      signal: AbortSignal.timeout(50000)
     });
     if (r.ok) {
       const j = await r.json();
@@ -88,23 +107,9 @@ async function verify(body, env) {
       why.push('agent http ' + r.status + ': ' + (await r.text()).slice(0, 150));
     }
   } catch (e) { why.push('agent ' + (e && e.name || 'error')); }
-  try {
-    const r = await fetch(FETCH_URL, {
-      method: 'POST',
-      headers: { 'X-API-Key': key, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ urls: [url], format: 'markdown' }),
-      signal: AbortSignal.timeout(30000)
-    });
-    if (r.ok) {
-      const j = await r.json();
-      const t = j.results && j.results[0] && j.results[0].text;
-      const lines = keyLines(typeof t === 'string' ? t : JSON.stringify(t || ''));
-      if (lines.length) return { ok: true, source: 'fetch', fallback: true, lines };
-      why.push('fetch: page read but no date/fee lines found');
-    } else {
-      why.push('fetch http ' + r.status);
-    }
-  } catch (e) { why.push('fetch ' + (e && e.name || 'error')); }
+
+  const lines = await backup;
+  if (lines) return { ok: true, source: 'fetch', fallback: true, lines };
   return { ok: false, error: 'unavailable', why };
 }
 
