@@ -36,3 +36,6 @@ Save. Push to GitHub Pages (or just open index.html).
 | Professor page to email | Fetch | Research > "Professor's page link" > Read with TinyFish |
 | Cited answers | Research API (instant mode) with Search as backup | Study abroad > "Ask with sources" |
 Notes: Research API is in beta (5 runs/day, may need enabling on the account); the app falls back to Search sources if it fails. Monitor email alerts are switched on in the TinyFish dashboard.
+
+## v3: Find by field (Research tab)
+Pick a field (AI/ML, Data Science, Cybersecurity, Mechanical, Electronics, Electrical, Civil, Chemical/Bio) and an institute. TinyFish Search (limited to ac.in or the chosen institute) returns faculty pages, sorted by how well they match the field. "Thesis & papers" uses TinyFish research-paper search, sorted by newest or most cited. "Use for my email" fills the email form. Needs the latest worker/worker.js deployed (open the Worker link: it should show "v":3).
