@@ -3,7 +3,7 @@
    2) Ask Buddy: when a question is not in the app's listings, it searches the live web with TinyFish.
    Your TinyFish key is NOT in this file. It lives inside the Cloudflare Worker (worker/worker.js).
    Paste your Worker URL below. Leave it empty to switch the TinyFish features off (the app works as before). */
-const TF_API='https://student-buddy-tf.nikunjkapoor33.workers.dev/';
+const TF_API='https://student-buddy-tf.nikunjkapoor33.workers.dev';
 const TF_KEY='sb_tf_v1';
 let TF=sGet(TF_KEY,{});
 
@@ -29,22 +29,41 @@ function tfBoxH(id){
   const body=v.fallback
     ?(v.lines||[]).map(l=>`<div>• ${esc(l)}</div>`).join('')
     :row('Status',v.status)+row('Deadline',v.deadline_text||v.deadline)+row('Fee',v.fee)+row('Eligibility',v.eligibility)+row('Summary',v.summary);
-  return `<div class="tip"><b>✅ Live check by TinyFish</b> · ${esc(when)}${body}<div style="margin-top:6px;font-size:12px;opacity:.8">Read from the official page. Always confirm on the official site before you apply.</div></div><button class="btn ghost" style="margin-top:8px" onclick="tfVerify('${esc(id)}')">Check again</button>`;
+  return `<div class="tip"><b>✅ Live check by TinyFish</b> · ${esc(when)}${body}<div style="margin-top:6px;font-size:12px;opacity:.8">From the official site. Always confirm on the official site before you apply.</div></div><button class="btn ghost" style="margin-top:8px" onclick="tfVerify('${esc(id)}')">Check again</button>`;
 }
 
+const tfSleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function tfVerify(id){
-  const it=find(id),box=$('tfbox');if(!it||!box)return;
-  box.innerHTML='<div class="tip">TinyFish is reading the official page. This can take up to a minute…</div>';
+  const it=find(id);if(!it||!$('tfbox'))return;
+  const say=h=>{const b=$('tfbox');if(b)b.innerHTML=h};
+  const fail=()=>say('<div class="why">Could not check live right now. Please use the official site button below.</div><button class="btn ghost" style="margin-top:8px" onclick="tfVerify(\''+esc(id)+'\')">Try again</button>');
+  const done=v=>{v.at=Date.now();TF[id]=v;sSet(TF_KEY,TF);if(v.deadline){DEADLINES[id]=v.deadline;render()}say(tfBoxH(id))};
+  say('<div class="tip">TinyFish agent is opening the official page…</div>');
+  let run=null;
   try{
-    const r=await tfCall('/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:it.link,name:it.n})},85000);
-    if(!r||!r.ok)throw new Error(r&&r.error||'failed');
-    const v=r.fallback?{fallback:true,lines:r.lines}:r.data;
-    v.at=Date.now();TF[id]=v;sSet(TF_KEY,TF);
-    if(v.deadline){DEADLINES[id]=v.deadline;render()}
-    const b=$('tfbox');if(b)b.innerHTML=tfBoxH(id);
-  }catch(e){
-    const b=$('tfbox');if(b)b.innerHTML='<div class="why">Could not check live right now. Please use the official site button below.</div><button class="btn ghost" style="margin-top:8px" onclick="tfVerify(\''+esc(id)+'\')">Try again</button>';
+    const s=await tfCall('/verify/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:it.link,name:it.n})},25000);
+    if(s&&s.ok)run=s.run_id;
+  }catch(e){}
+  if(run){
+    const t0=Date.now();
+    while(Date.now()-t0<150000){
+      await tfSleep(4000);
+      try{
+        const r=await tfCall('/verify/status?id='+encodeURIComponent(run),{},20000);
+        if(r&&r.ok&&r.state==='done'){done(r.data);return}
+        if(r&&r.ok&&r.state==='failed')break;
+      }catch(e){}
+      say('<div class="tip">TinyFish agent is reading the official page… '+Math.round((Date.now()-t0)/1000)+'s<br><small>This can take up to 2 minutes. Please wait.</small></div>');
+    }
+    try{tfCall('/verify/cancel?id='+encodeURIComponent(run),{method:'POST'},10000)}catch(e){}
   }
+  /* backup: free TinyFish search on the official site */
+  try{
+    say('<div class="tip">Trying a quicker TinyFish search on the official site…</div>');
+    const q=await tfCall('/verify/quick?url='+encodeURIComponent(it.link)+'&name='+encodeURIComponent(it.n),{},25000);
+    if(q&&q.ok&&q.lines&&q.lines.length){done({fallback:true,lines:q.lines});return}
+  }catch(e){}
+  fail();
 }
 
 /* add the box inside the existing "How to apply" sheet, above the buttons. Nothing else in the layout changes. */
