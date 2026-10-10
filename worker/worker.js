@@ -71,6 +71,7 @@ async function verify(body, env) {
     `{"status":"open|closed|upcoming|unknown","deadline":"YYYY-MM-DD or null","deadline_text":"deadline as written on the page or null",` +
     `"fee":"fee as written or null","eligibility":"age/year/branch rule in one short line or null","summary":"max 25 words"}. ` +
     `If something is not on the page use null. Do not guess.`;
+  const why = [];
   try {
     const r = await fetch(AGENT_URL, {
       method: 'POST',
@@ -79,10 +80,14 @@ async function verify(body, env) {
       signal: AbortSignal.timeout(75000)
     });
     if (r.ok) {
-      const data = parseAgent(await r.json());
+      const j = await r.json();
+      const data = parseAgent(j);
       if (data) return { ok: true, source: 'agent', data };
+      why.push('agent: no usable data: ' + JSON.stringify(j).slice(0, 200));
+    } else {
+      why.push('agent http ' + r.status + ': ' + (await r.text()).slice(0, 150));
     }
-  } catch (e) { /* fall through to Fetch */ }
+  } catch (e) { why.push('agent ' + (e && e.name || 'error')); }
   try {
     const r = await fetch(FETCH_URL, {
       method: 'POST',
@@ -95,9 +100,12 @@ async function verify(body, env) {
       const t = j.results && j.results[0] && j.results[0].text;
       const lines = keyLines(typeof t === 'string' ? t : JSON.stringify(t || ''));
       if (lines.length) return { ok: true, source: 'fetch', fallback: true, lines };
+      why.push('fetch: page read but no date/fee lines found');
+    } else {
+      why.push('fetch http ' + r.status);
     }
-  } catch (e) {}
-  return { ok: false, error: 'unavailable' };
+  } catch (e) { why.push('fetch ' + (e && e.name || 'error')); }
+  return { ok: false, error: 'unavailable', why };
 }
 
 async function search(q, env) {
