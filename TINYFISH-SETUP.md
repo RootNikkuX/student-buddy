@@ -27,3 +27,12 @@ Save. Push to GitHub Pages (or just open index.html).
 - Search and Fetch are free (about 5 searches/min). The Agent check uses TinyFish credits. If the agent fails, the Worker falls back to the free Fetch API.
 - Optional: add a Worker variable `ALLOWED_ORIGIN` = `https://yourname.github.io` so only your site can use the Worker.
 - Never put the API key in any file inside the website folder.
+
+## v2 features (needs the NEW worker/worker.js pasted into Cloudflare, then Deploy)
+| Feature | TinyFish API | Where in the app |
+|---|---|---|
+| Alert me | Monitor API (daily 9 AM IST page monitor) | Any listing > How to apply > "Alert me" |
+| Is this real? | Fetch + Search (page text + scam reports + domain rules) | Home > "Is this real?", or paste a link in Ask Buddy |
+| Professor page to email | Fetch | Research > "Professor's page link" > Read with TinyFish |
+| Cited answers | Research API (instant mode) with Search as backup | Study abroad > "Ask with sources" |
+Notes: Research API is in beta (5 runs/day, may need enabling on the account); the app falls back to Search sources if it fails. Monitor email alerts are switched on in the TinyFish dashboard.

@@ -158,6 +158,138 @@ async function search(q, env) {
   } catch (e) { return { ok: false, error: 'search_failed' }; }
 }
 
+
+/* ===================== v2 features ===================== */
+const MON_URL = 'https://agent.tinyfish.ai/v1/monitors';
+const RES_START = 'https://agent.tinyfish.ai/v1/automation/run-research-async';
+const RES_GET = 'https://agent.tinyfish.ai/v1/research-run/';
+const okUrl = u => /^https:\/\/[^\s]{3,480}$/.test(String(u || ''));
+const hdr = env => ({ 'X-API-Key': env.TINYFISH_API_KEY, 'Content-Type': 'application/json' });
+const plain = s => String(s || '').replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[#*_`>|]/g, ' ').replace(/\s+/g, ' ').trim();
+
+/* 1) Alert me = TinyFish Monitor (page monitor, runs every day at 9:00 IST) */
+async function monCreate(b, env) {
+  const url = String(b.url || ''), name = String(b.name || 'Student Buddy alert').slice(0, 90);
+  if (!okUrl(url)) return { ok: false, error: 'bad_url' };
+  if (!env.TINYFISH_API_KEY) return { ok: false, error: 'no_key' };
+  try {
+    const r = await fetch(MON_URL, { method: 'POST', headers: hdr(env), signal: AbortSignal.timeout(25000), body: JSON.stringify({
+      type: 'fetch', name: 'SB: ' + name, config: { url, format: 'markdown' },
+      schedule_cron: 'CRON_TZ=Asia/Kolkata 0 9 * * *',
+      purpose: 'A new notice, last date, registration status or fee change for ' + name }) });
+    const t = await r.text(); let j = {}; try { j = JSON.parse(t); } catch (e) {}
+    if (!r.ok) return { ok: false, error: 'monitor_http_' + r.status, why: t.slice(0, 200) };
+    const id = j.monitor && j.monitor.id;
+    if (!validId(id)) return { ok: false, error: 'no_monitor_id' };
+    return { ok: true, id };
+  } catch (e) { return { ok: false, error: 'monitor_' + (e && e.name || 'error') }; }
+}
+async function monRun(id, env) {
+  if (!validId(id) || !env.TINYFISH_API_KEY) return { ok: false, error: 'bad_id' };
+  try {
+    const r = await fetch(MON_URL + '/' + id + '/runs', { method: 'POST', headers: hdr(env), signal: AbortSignal.timeout(40000) });
+    if (!r.ok) return { ok: false, error: 'run_http_' + r.status };
+    const j = await r.json(); const run = j.run || j;
+    const ch = run.changed ?? run.has_changed ?? run.is_changed ?? null;
+    return { ok: true, changed: typeof ch === 'boolean' ? ch : null, baseline: !!run.is_baseline };
+  } catch (e) { return { ok: false, error: 'run_' + (e && e.name || 'error') }; }
+}
+async function monDelete(id, env) {
+  if (!validId(id) || !env.TINYFISH_API_KEY) return { ok: false };
+  try { await fetch(MON_URL + '/' + id, { method: 'DELETE', headers: hdr(env), signal: AbortSignal.timeout(15000) }); } catch (e) {}
+  return { ok: true };
+}
+
+/* 2) "Is this real?" = Fetch API (reads the page) + Search API (looks for scam reports) + domain rules */
+const SHORT = /(^|\.)(bit\.ly|tinyurl\.com|t\.co|rb\.gy|cutt\.ly|is\.gd|shorturl\.at|tiny\.cc)$/i;
+const TRUST = /\.(gov\.in|nic\.in|ac\.in|edu\.in|res\.in|edu|gov)$/i;
+const ODD_TLD = /\.(xyz|top|click|buzz|work|site|shop|live|icu|vip|rest|fit|cfd|sbs)$/i;
+async function scam(url, env) {
+  if (!okUrl(url)) return { ok: false, error: 'need_https_link' };
+  if (!env.TINYFISH_API_KEY) return { ok: false, error: 'no_key' };
+  let host; try { host = new URL(url).hostname.toLowerCase(); } catch (e) { return { ok: false, error: 'bad_url' }; }
+  const bare = host.replace(/^www\./, '');
+  const reasons = []; let risk = 25;
+  const add = (pts, good, t) => { risk += pts; reasons.push({ good, t }); };
+  if (TRUST.test(bare)) add(-30, true, 'Official-style domain (' + bare.split('.').slice(-2).join('.') + '). Government and college sites use these.');
+  if (SHORT.test(bare)) add(30, false, 'Shortened link. You cannot see where it really goes.');
+  if (ODD_TLD.test(bare)) add(20, false, 'Unusual domain ending that scam sites often use.');
+  if ((bare.match(/-/g) || []).length >= 2 || /\d{3,}/.test(bare.split('.')[0]) || bare.split('.').length >= 5) add(15, false, 'Domain looks stretched or numbered, a common look-alike trick.');
+  const [pg, sr] = await Promise.all([
+    fetch(FETCH_URL, { method: 'POST', headers: hdr(env), signal: AbortSignal.timeout(30000), body: JSON.stringify({ urls: [url], format: 'markdown', links: false, per_url_timeout_ms: 25000 }) }).then(r => r.ok ? r.json() : null).catch(() => null),
+    fetch(SEARCH_URL + '?query=' + encodeURIComponent(bare + ' scam OR fake OR fraud complaint'), { headers: { 'X-API-Key': env.TINYFISH_API_KEY }, signal: AbortSignal.timeout(20000) }).then(r => r.ok ? r.json() : null).catch(() => null)
+  ]);
+  const page = pg && pg.results && pg.results[0];
+  const text = page && typeof page.text === 'string' ? page.text.slice(0, 20000) : '';
+  if (!page) reasons.push({ good: false, t: 'TinyFish could not read this page. Do not trust it just because of that, and do not share personal data on it.' });
+  if (text) {
+    if (/(registration|processing|security|joining|training|kit)\s+(fee|charge|deposit)|advance payment|pay\s*(rs\.?|₹|inr)\s*\d/i.test(text)) add(25, false, 'Page asks you to pay a fee or deposit. Real government and big-company jobs and internships do not.');
+    if (/(guaranteed|100%)\s*(job|placement|selection)|without interview|no interview|limited seats|hurry up|last chance/i.test(text)) add(15, false, 'Page uses pressure or guarantee words ("guaranteed job", "limited seats").');
+    if (/aadhaar|aadhar|\bpan\b|\botp\b|bank account|card number|cvv/i.test(text)) add(15, false, 'Page asks for sensitive details (Aadhaar, PAN, OTP or bank).');
+    if (/whatsapp|telegram/i.test(text) && !TRUST.test(bare)) add(8, false, 'Contact is mainly WhatsApp or Telegram.');
+    if (!reasons.some(x => !x.good)) reasons.push({ good: true, t: 'No fee, pressure or sensitive-data words found on the page.' });
+  }
+  const reports = ((sr && sr.results) || []).filter(x => !String(x.url || '').includes(bare) && /scam|fake|fraud|cheat|complaint/i.test((x.title || '') + ' ' + (x.snippet || '')))
+    .slice(0, 3).map(x => ({ title: String(x.title || '').slice(0, 110), snippet: String(x.snippet || '').slice(0, 160), url: x.url, site: x.site_name || '' }));
+  if (reports.length) add(25, false, 'Other sites mention this domain with words like scam or fraud. See below.');
+  risk = Math.max(0, Math.min(100, risk));
+  const level = risk >= 60 ? 'high' : risk >= 35 ? 'careful' : 'low';
+  return { ok: true, host: bare, risk, level, title: page ? plain(page.title).slice(0, 120) : '', reasons, reports };
+}
+
+/* 3) Professor email = Fetch API reads the faculty page, we pick research area + paper lines */
+async function profRead(url, env) {
+  if (!okUrl(url)) return { ok: false, error: 'need_https_link' };
+  if (!env.TINYFISH_API_KEY) return { ok: false, error: 'no_key' };
+  try {
+    const r = await fetch(FETCH_URL, { method: 'POST', headers: hdr(env), signal: AbortSignal.timeout(35000), body: JSON.stringify({ urls: [url], format: 'markdown', links: false, per_url_timeout_ms: 30000 }) });
+    if (!r.ok) return { ok: false, error: 'fetch_http_' + r.status };
+    const j = await r.json(); const p = j.results && j.results[0];
+    if (!p || typeof p.text !== 'string') return { ok: false, error: (j.errors && j.errors[0] && j.errors[0].error) || 'no_page' };
+    const lines = p.text.split(/\n+/).map(plain).filter(Boolean);
+    let area = '';
+    for (let i = 0; i < lines.length && !area; i++) {
+      if (/(research (interests?|areas?)|areas? of (research|interest)|specializ|interests?\s*:)/i.test(lines[i]) && lines[i].length < 400) {
+        const after = lines[i].replace(/^.*?(interests?|areas?|specializ\w*)\s*[:\-–]?\s*/i, '');
+        area = (after.length > 6 ? after : (lines[i + 1] || '')).slice(0, 160);
+      }
+    }
+    const papers = lines.filter(l => /\b(19|20)\d\d\b/.test(l) && l.length > 45 && l.length < 260 && /["“”.]/.test(l) && !/copyright|all rights|last updated/i.test(l)).slice(0, 4);
+    return { ok: true, title: plain(p.title).slice(0, 120), area, papers };
+  } catch (e) { return { ok: false, error: 'prof_' + (e && e.name || 'error') }; }
+}
+
+/* 4) Study-abroad cited answers = TinyFish Research API (instant mode) */
+async function resStart(b, env) {
+  const country = String(b.country || '').slice(0, 40), q = String(b.q || '').slice(0, 300);
+  if (!q) return { ok: false, error: 'empty' };
+  if (!env.TINYFISH_API_KEY) return { ok: false, error: 'no_key' };
+  const query = `An Indian college student asks about studying in ${country || 'abroad'}: ${q}. Use official government and university sources. Give amounts in the local currency and approximate INR. Keep the answer under 180 words and say if something changes often.`;
+  try {
+    const r = await fetch(RES_START, { method: 'POST', headers: hdr(env), signal: AbortSignal.timeout(25000), body: JSON.stringify({ query, mode: 'instant', output_language: 'en' }) });
+    const t = await r.text(); let j = {}; try { j = JSON.parse(t); } catch (e) {}
+    if (!r.ok) return { ok: false, error: 'research_http_' + r.status };
+    const id = j.research_run_id;
+    return validId(id) ? { ok: true, id } : { ok: false, error: 'no_run_id' };
+  } catch (e) { return { ok: false, error: 'research_' + (e && e.name || 'error') }; }
+}
+async function resStatus(id, env) {
+  if (!validId(id) || !env.TINYFISH_API_KEY) return { ok: false, error: 'bad_id' };
+  try {
+    const r = await fetch(RES_GET + id, { headers: { 'X-API-Key': env.TINYFISH_API_KEY }, signal: AbortSignal.timeout(20000) });
+    if (!r.ok) return { ok: false, error: 'status_http_' + r.status };
+    const j = await r.json(); const st = String(j.status || '').toUpperCase();
+    if (st === 'COMPLETED') {
+      const dr = j.deep_result || {}, qr = j.quick_result || {};
+      const ans = plain(dr.result || qr.answer || (typeof j.quick_result_summary === 'string' ? j.quick_result_summary : '')).slice(0, 1800);
+      const cit = (dr.citations || qr.citations || []).filter(u => /^https?:\/\//.test(u)).slice(0, 6);
+      return ans ? { ok: true, state: 'done', answer: ans, citations: cit } : { ok: true, state: 'failed' };
+    }
+    if (['FAILED', 'CANCELLED', 'TIMED_OUT'].includes(st)) return { ok: true, state: 'failed' };
+    return { ok: true, state: 'running' };
+  } catch (e) { return { ok: false, error: 'status_' + (e && e.name || 'error') }; }
+}
+
 export default {
   async fetch(req, env) {
     const h = cors(env, req);
@@ -171,6 +303,13 @@ export default {
     if (u.pathname === '/verify/status' && req.method === 'GET') return json(await verifyStatus(u.searchParams.get('id'), env), 200, h);
     if (u.pathname === '/verify/cancel' && req.method === 'POST') return json(await verifyCancel(u.searchParams.get('id'), env), 200, h);
     if (u.pathname === '/verify/quick' && req.method === 'GET') return json(await quick(u.searchParams.get('url'), u.searchParams.get('name'), env), 200, h);
-    return json({ ok: true, service: 'student-buddy-tinyfish-proxy' }, 200, h);
+    if (u.pathname === '/monitor/create' && req.method === 'POST') { let b = {}; try { b = await req.json(); } catch (e) {} return json(await monCreate(b, env), 200, h); }
+    if (u.pathname === '/monitor/run' && req.method === 'POST') return json(await monRun(u.searchParams.get('id'), env), 200, h);
+    if (u.pathname === '/monitor/delete' && req.method === 'POST') return json(await monDelete(u.searchParams.get('id'), env), 200, h);
+    if (u.pathname === '/scam' && req.method === 'GET') return json(await scam(u.searchParams.get('url'), env), 200, h);
+    if (u.pathname === '/prof' && req.method === 'GET') return json(await profRead(u.searchParams.get('url'), env), 200, h);
+    if (u.pathname === '/research/start' && req.method === 'POST') { let b = {}; try { b = await req.json(); } catch (e) {} return json(await resStart(b, env), 200, h); }
+    if (u.pathname === '/research/status' && req.method === 'GET') return json(await resStatus(u.searchParams.get('id'), env), 200, h);
+    return json({ ok: true, service: 'student-buddy-tinyfish-proxy', v: 2 }, 200, h);
   }
 };
