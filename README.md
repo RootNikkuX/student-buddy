@@ -37,3 +37,9 @@ Rules: same `id` as a built-in listing = it overrides that listing. New `id` = n
 `type` = hackathon, sports, etc. or `job` for govt jobs (use `job_type`: army, navy, airforce, police...).
 If the sheet cannot load, the app uses the last saved copy, then the built-in data.
 Only publish data you are happy to make public.
+
+## TinyFish (live data)
+Two features use the TinyFish API. Setup steps are in `TINYFISH-SETUP.md`.
+- "Check live with TinyFish" button in every listing's "How to apply" sheet (reads the official page: status, deadline, fee).
+- Ask Buddy searches the live web with TinyFish when a question is not in the app's listings.
+Files: `js/tinyfish.js` (browser side), `worker/worker.js` (Cloudflare Worker that keeps the API key secret).

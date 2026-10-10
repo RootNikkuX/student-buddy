@@ -185,7 +185,7 @@ function answer(raw){
   if(RX.crisis.test(q))return {safe:1,text:'I am really sorry you are going through this. You do not have to carry it alone. Please talk to a trained counsellor right now. It is free and private. If you are in danger, call 112 or go to someone near you.',calls:[['Tele-MANAS 14416','14416'],['KIRAN 1800-599-0019','18005990019'],['Emergency 112','112']],btns:[['More support',"closeChat();go('support')"]],chips:[]};
   if(RX.career.test(q))return {text:'It is normal to feel confused about career. A free career counsellor can help you compare options. You can also ask your college placement cell.',links:[['National Career Service','https://www.ncs.gov.in'],['ADPList mentors','https://adplist.org']],btns:[['Open support page',"closeChat();go('support')"]],chips:['Govt jobs I can apply to','Internships for me']};
   if(RX.support.test(q))return {safe:1,text:'It is okay to ask for help. These are free and private, and a trained counsellor can just listen. If it feels urgent, call 112.',calls:[['Tele-MANAS 14416','14416'],['KIRAN 1800-599-0019','18005990019'],['iCall 9152987821','9152987821']],btns:[['Open support page',"closeChat();go('support')"]],chips:['Career guidance']};
-  if(RX.who.test(q))return {text:'I am Buddy, the helper inside Student Buddy. I search the listings in this app: events, internships, govt jobs, sports, study abroad, language exams, budget, research and support. I do not browse the internet, so always check the official link before you apply.',chips:CSUG};
+  if(RX.who.test(q))return {text:'I am Buddy, the helper inside Student Buddy. I search the listings in this app: events, internships, govt jobs, sports, study abroad, language exams, budget, research and support. '+(typeof TF_API!=='undefined'&&TF_API?'If something is not in my listings I can search the live web with TinyFish. ':'I do not browse the internet. ')+'Always check the official link before you apply.',chips:CSUG};
   if(RX.thanks.test(q))return {text:'Anytime! Ask me anything else.',chips:CSUG.slice(0,3)};
   if(RX.hi.test(q)&&q.trim().split(' ').length<=3)return {text:'Hi! What do you want to find? I can check events, internships, govt jobs, sports, studying abroad, exams, budget and research help.',chips:CSUG};
   if(RX.exam.test(q)){
@@ -232,7 +232,7 @@ function answer(raw){
     return {text:`${profLine(o)}I found ${L.length} match${L.length>1?'es':''}. Top ${top.length}:${hint}`,rows:top.map(x=>itemRow(x.it,x.c)),btns:!P?[['Set up my profile','closeChat();startOB()']]:[['See all in Discover',"closeChat();go('discover',{disc:'events'})"]],chips:['Army jobs for me','Sports near me','Internships for 2nd year CSE']};
   }
   if(isListing&&!L.length&&RX.elig.test(q))return {text:`${profLine(o)}I could not find anything you can apply to for that. Try another type or year.`,chips:CSUG};
-  return {text:'I could not find that in my listings. I can help with events, internships, govt jobs, sports, studying abroad, language exams, budget, research help and support. Try one of these:',chips:CSUG};
+  return {miss:1,text:'I could not find that in my listings. I can help with events, internships, govt jobs, sports, studying abroad, language exams, budget, research help and support. Try one of these:',chips:CSUG};
 }
 
 async function viaAI(q,a){
@@ -267,6 +267,7 @@ async function sendChat(t){
   CH.busy=true;CH.msgs.push({typing:1});renderChat();
   let a;try{a=answer(t)}catch(e){a={text:'Sorry, something went wrong. Please try another question.',chips:CSUG}}
   let ai=null;if(AI_ENDPOINT&&!a.safe)ai=await viaAI(t,a);
+  if(a.miss&&!ai&&typeof tfSearch==='function'&&TF_API){try{const L=await tfSearch(t);if(L.length)a={text:'This is not in my listings, so I searched the live web with TinyFish. Please check the official site before you apply.',rows:L.slice(0,4).map(x=>linkRow(x.title,x.snippet,x.url)),chips:CSUG}}catch(e){}}
   if(!ai)await new Promise(r=>setTimeout(r,350));
   CH.msgs.pop();if(ai)a.text=ai;CH.msgs.push(Object.assign({me:0},a));CH.busy=false;renderChat();
 }
