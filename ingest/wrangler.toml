@@ -1,0 +1,14 @@
+name = "student-buddy-ingest"
+main = "src/index.js"
+compatibility_date = "2026-01-01"
+
+[triggers]
+crons = ["*/10 * * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "student-buddy"
+database_id = "PASTE_ID_FROM_wrangler_d1_create"
+
+# Secrets (never in this file):  wrangler secret put TINYFISH_API_KEY   and   wrangler secret put INGEST_TOKEN
+# Optional variable:  ALLOWED_ORIGIN = "https://rootnikkux.github.io"
