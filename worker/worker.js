@@ -290,6 +290,60 @@ async function resStatus(id, env) {
   } catch (e) { return { ok: false, error: 'status_' + (e && e.name || 'error') }; }
 }
 
+/* ===================== field finder: professors and theses by specialization ===================== */
+const FIELDS = {
+  ai_ml:   { q: 'machine learning deep learning artificial intelligence', kw: ['machine learning','deep learning','neural','reinforcement','natural language','nlp','computer vision','artificial intelligence','generative','language model','pattern recognition'] },
+  data_sci:{ q: 'data science data mining big data analytics statistics', kw: ['data science','data mining','big data','analytics','statistic','database','visualization','information retrieval','data engineering','time series'] },
+  cyber:   { q: 'cybersecurity cryptography network security privacy', kw: ['security','cryptograph','privacy','malware','intrusion','blockchain','forensic','threat','vulnerab','trust'] },
+  mech:    { q: 'mechanical engineering thermal fluid mechanics manufacturing robotics', kw: ['mechanical','thermal','fluid','manufacturing','heat transfer','combustion','robot','mechatronic','vibration','cfd','turbine','additive','tribology','solid mechanics'] },
+  ece:     { q: 'electronics communication signal processing vlsi embedded wireless', kw: ['vlsi','signal processing','wireless','communication','embedded','antenna','semiconductor','analog','iot','photonic','5g'] },
+  elec:    { q: 'electrical engineering power systems control systems energy', kw: ['power system','power electronics','smart grid','control system','electric machine','renewable','energy storage','electric vehicle','drives'] },
+  civil:   { q: 'civil engineering structural geotechnical transportation water environmental', kw: ['structural','geotechnical','transportation','hydrology','water resources','earthquake','concrete','environmental','construction','remote sensing'] },
+  chembio: { q: 'chemical engineering biotechnology bioinformatics materials', kw: ['chemical','biotechnology','bioinformatics','biomedical','genomic','protein','catalysis','polymer','nanomaterial','drug'] }
+};
+const INST = /^[a-z0-9.-]{3,40}$/i;
+function classify(text, want) {
+  const t = String(text || '').toLowerCase(), hits = {};
+  for (const k in FIELDS) { let n = 0; for (const w of FIELDS[k].kw) if (t.includes(w)) n++; if (n) hits[k] = n; }
+  const labels = Object.keys(hits).sort((a, b) => hits[b] - hits[a]).slice(0, 2);
+  return { labels, score: want ? (hits[want] || 0) : 0 };
+}
+async function facultyFind(field, inst, env) {
+  if (!FIELDS[field]) return { ok: false, error: 'bad_field' };
+  if (!env.TINYFISH_API_KEY) return { ok: false, error: 'no_key' };
+  const dom = INST.test(inst || '') ? inst : 'ac.in';
+  const p = new URLSearchParams({ query: 'faculty professor research interests ' + FIELDS[field].q, include_domains: dom, location: 'IN', language: 'en',
+    purpose: 'Help an Indian student find professors working in ' + field.replace('_', ' ') });
+  try {
+    const r = await fetch(SEARCH_URL + '?' + p, { headers: { 'X-API-Key': env.TINYFISH_API_KEY }, signal: AbortSignal.timeout(20000) });
+    if (!r.ok) return { ok: false, error: 'search_' + r.status };
+    const j = await r.json();
+    const out = (j.results || []).map(x => {
+      const text = (x.title || '') + ' ' + (x.snippet || ''), c = classify(text, field);
+      const m = String(x.snippet || '').match(/(research (interests?|areas?)|area of interest|areas? of (research|interest)|specializ\w+)\s*[:\-–]\s*([^.]{6,180})/i);
+      const list = /faculty|people|staff|directory|department|\/dept|group|centre|center/i.test((x.title || '') + ' ' + (x.url || '')) && !/~/.test(x.url || '');
+      return { title: plain(x.title).slice(0, 110), snippet: plain(x.snippet).slice(0, 220), interests: m ? plain(m[4]) : '', url: x.url, site: x.site_name || '', kind: list ? 'list' : 'profile', labels: c.labels, score: c.score };
+    }).filter(x => /^https?:\/\//.test(x.url || '') && x.score > 0).sort((a, b) => b.score - a.score || (a.kind === 'profile' ? -1 : 1)).slice(0, 10);
+    return { ok: true, results: out };
+  } catch (e) { return { ok: false, error: 'faculty_' + (e && e.name || 'error') }; }
+}
+async function thesisFind(field, sort, year, env) {
+  if (!FIELDS[field]) return { ok: false, error: 'bad_field' };
+  if (!env.TINYFISH_API_KEY) return { ok: false, error: 'no_key' };
+  const y = Math.max(2015, Math.min(2026, parseInt(year, 10) || 2022));
+  const p = new URLSearchParams({ query: FIELDS[field].q + ' thesis dissertation India', domain_type: 'research_paper', pub_year_min: String(y), language: 'en',
+    purpose: 'Help an Indian student find recent thesis topics and papers in ' + field.replace('_', ' ') });
+  try {
+    const r = await fetch(SEARCH_URL + '?' + p, { headers: { 'X-API-Key': env.TINYFISH_API_KEY }, signal: AbortSignal.timeout(20000) });
+    if (!r.ok) return { ok: false, error: 'search_' + r.status };
+    const j = await r.json();
+    let out = (j.results || []).map(x => ({ title: plain(x.title).slice(0, 150), authors: (x.authors || []).slice(0, 3).join(', '), year: x.year || null, venue: plain(x.venue).slice(0, 60),
+      cited: x.cited_by_count || 0, pdf: /^https?:\/\//.test(x.pdf_url || '') ? x.pdf_url : '', url: x.url, labels: classify((x.title || '') + ' ' + (x.snippet || ''), field).labels })).filter(x => /^https?:\/\//.test(x.url || ''));
+    out = sort === 'cited' ? out.sort((a, b) => b.cited - a.cited) : out.sort((a, b) => (b.year || 0) - (a.year || 0) || b.cited - a.cited);
+    return { ok: true, results: out.slice(0, 10) };
+  } catch (e) { return { ok: false, error: 'thesis_' + (e && e.name || 'error') }; }
+}
+
 export default {
   async fetch(req, env) {
     const h = cors(env, req);
@@ -310,6 +364,8 @@ export default {
     if (u.pathname === '/prof' && req.method === 'GET') return json(await profRead(u.searchParams.get('url'), env), 200, h);
     if (u.pathname === '/research/start' && req.method === 'POST') { let b = {}; try { b = await req.json(); } catch (e) {} return json(await resStart(b, env), 200, h); }
     if (u.pathname === '/research/status' && req.method === 'GET') return json(await resStatus(u.searchParams.get('id'), env), 200, h);
-    return json({ ok: true, service: 'student-buddy-tinyfish-proxy', v: 2 }, 200, h);
+    if (u.pathname === '/faculty' && req.method === 'GET') return json(await facultyFind(u.searchParams.get('field'), u.searchParams.get('inst'), env), 200, h);
+    if (u.pathname === '/theses' && req.method === 'GET') return json(await thesisFind(u.searchParams.get('field'), u.searchParams.get('sort'), u.searchParams.get('year'), env), 200, h);
+    return json({ ok: true, service: 'student-buddy-tinyfish-proxy', v: 3 }, 200, h);
   }
 };
