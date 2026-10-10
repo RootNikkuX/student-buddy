@@ -1,6 +1,6 @@
 /* Reads scraped opportunities from the ingest backend (ingest/ folder) and adds them to the app.
    Paste the Worker link in OPP_API, e.g. 'https://student-buddy-ingest.YOURNAME.workers.dev'. Empty = off, the app works as before. */
-const OPP_API='';
+const OPP_API='https://student-buddy-ingest.nikunjkapoor33.workers.dev';
 const OPP_CACHE='sb_opps_v1';
 const OPP_EMO={hackathon:'🏆',internship:'💼',job:'🪖',competition:'🎯',workshop:'🛠️'};
 const OPP_HOW=['Open the official page with the button below.','Check who can apply and the last date.','Apply before the deadline.'];
